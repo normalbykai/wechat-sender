@@ -90,6 +90,9 @@ try:
 except ImportError:
     _HAS_WIN32 = False
 
+if _HAS_WIN32:
+    from wechat_visual_win import VisualChat, find_window
+
 # ─── 微信 UIA 常量（微信 4.0+ 固定结构）──────────────────
 WX_CLASS   = "mmui::MainWindow"   # 微信主窗口 ClassName
 WX_TITLE   = "微信"               # 微信主窗口 Name
@@ -308,6 +311,17 @@ def call_send(target: str, msg_type: str, text: str, image_path: str):
     接口签名与之前版本完全一致。
     """
     global _cached_wx
+
+    if _HAS_WIN32:
+        handle = find_window()
+        if handle:
+            chat = VisualChat(handle)
+            chat.open(target, _set_clipboard_text)
+            if msg_type in ("文字", "文字+图片"):
+                chat.send(target, text, _set_clipboard_text)
+            if msg_type in ("图片", "文字+图片"):
+                chat.send(target, image_path, _copy_image_to_clipboard)
+            return
 
     # 懒加载 + 有效性检查
     if _cached_wx is None or not _cached_wx.Exists(0, 0):

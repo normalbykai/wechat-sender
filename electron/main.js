@@ -29,10 +29,10 @@ function ensurePythonDeps() {
   if (!app.isPackaged) return
   const pythonPath = getPythonPath()
   try {
-    require('child_process').execSync(
-      `${pythonPath} -c "import openpyxl; print('ok')"`,
-      { timeout: 8000 }
-    )
+    require('child_process').execFileSync(pythonPath, ['-c', 'import openpyxl'], {
+      timeout: 8000,
+      windowsHide: true,
+    })
     return // openpyxl already available
   } catch (_) {}
 

@@ -207,7 +207,16 @@ def _get_win_mod():
     _win_script = _SCRIPTS_DIR / "wechat_send_win.py"
     spec = importlib.util.spec_from_file_location("wechat_send_win", str(_win_script))
     mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
+    # dataclass uses sys.modules to resolve postponed annotations.
+    sys.modules[spec.name] = mod
+    sys.path.insert(0, str(_SCRIPTS_DIR))
+    try:
+        spec.loader.exec_module(mod)
+    except BaseException:
+        del sys.modules[spec.name]
+        raise
+    finally:
+        sys.path.pop(0)
     _win_mod = mod
     return mod
 
@@ -367,20 +376,24 @@ def cmd_status(args):
         print(f"待发送: {waiting}, 发送中: {running}, 成功: {success}, 失败: {failed}, 总计: {len(tasks)}")
 
 
+def _parse_send_time(value: str) -> Optional[datetime]:
+    if not value:
+        return None
+    for fmt in ("%Y-%m-%d %H:%M", "%Y-%m-%d %H:%M:%S", "%Y-%m-%d"):
+        try:
+            return datetime.strptime(value.replace("T", " "), fmt)
+        except ValueError:
+            pass
+    return None
+
+
 def _parse_tasks_from_json(json_str: str) -> list[Task]:
     """把 GUI 传来的 JSON 列表转成 Task 对象列表。"""
     import json as _json
     data = _json.loads(json_str)
     tasks = []
     for idx, item in enumerate(data):
-        send_time = None
-        if item.get("send_time"):
-            for fmt in ("%Y-%m-%d %H:%M", "%Y-%m-%d %H:%M:%S", "%Y-%m-%d"):
-                try:
-                    send_time = datetime.strptime(item["send_time"], fmt)
-                    break
-                except ValueError:
-                    pass
+        send_time = _parse_send_time(item.get("send_time"))
         tasks.append(Task(
             row=0,  # 不关联 Excel 行
             app=str(item.get("app", "微信")).strip(),
@@ -556,16 +569,7 @@ def cmd_daemon(args):
                 if status.startswith(STATUS_SUCCESS) and not task_dict.get("repeat"):
                     continue
 
-                # 解析 send_time
-                send_time = None
-                raw_st = task_dict.get("send_time", "") or ""
-                if raw_st:
-                    for fmt in ("%Y-%m-%d %H:%M", "%Y-%m-%d %H:%M:%S", "%Y-%m-%d"):
-                        try:
-                            send_time = datetime.strptime(raw_st, fmt)
-                            break
-                        except ValueError:
-                            pass
+                send_time = _parse_send_time(task_dict.get("send_time"))
 
                 # 没有 send_time 的任务留着手动处理（守护进程跳过）
                 if send_time is None:
