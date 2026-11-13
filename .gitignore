@@ -1,2 +1,7 @@
-dist-electron/
-node_modules/
+/dist/
+/dist-electron/
+/dist-windows-*/
+/node_modules/
+/python/bundle/
+__pycache__/
+*.pyc
