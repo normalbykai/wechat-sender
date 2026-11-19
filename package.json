@@ -29,6 +29,9 @@
     "react": "^18.3.1",
     "react-dom": "^18.3.1"
   },
+  "config": {
+    "electron_builder_binaries_mirror": "https://npmmirror.com/mirrors/electron-builder-binaries/"
+  },
   "build": {
     "afterPack": "./scripts/afterPack.js",
     "appId": "com.wechat-sender.app",
