@@ -32,6 +32,9 @@
   "build": {
     "afterPack": "./scripts/afterPack.js",
     "appId": "com.wechat-sender.app",
+    "electronDownload": {
+      "mirror": "https://npmmirror.com/mirrors/electron/"
+    },
     "productName": "WechatSender",
     "directories": {
       "output": "dist-electron"
@@ -86,5 +89,10 @@
       "icon": "assets/icon.png"
     },
     "publish": null
+  },
+  "allowScripts": {
+    "electron@34.5.8": true,
+    "esbuild@0.16.16": true,
+    "esbuild@0.25.12": true
   }
 }

@@ -3,6 +3,7 @@ import ctypes
 import json
 import os
 from pathlib import Path
+import re
 import subprocess
 from tempfile import TemporaryDirectory
 import time
@@ -12,6 +13,20 @@ import uiautomation as auto
 import win32api
 import win32gui
 import win32process
+
+# 群聊标题形如 “群名（416）”，企业微信图标会被 OCR 读成多余字符（如末尾的“0”）
+_GROUP_COUNT = re.compile(r"[（(]\s*\d+\+?\s*[)）]")
+
+
+def _normalize(text):
+    return (text or "").replace(" ", "").replace("　", "")
+
+
+def _group_title_matches(text, target):
+    normalized = _normalize(text)
+    if normalized == target:
+        return True
+    return bool(re.match(re.escape(target) + r"[（(]\s*\d+\+?\s*[)）]", normalized))
 
 
 def find_window():
@@ -59,18 +74,22 @@ class VisualChat:
         if not self.scale or self.width < self.px(780) or self.height < self.px(500):
             raise RuntimeError("请放大微信窗口后重试")
         screenshot = self.capture()
-        y = self.px(72)
-        candidates = [
-            x for x in range(self.px(250), self.width - self.px(350))
-            if all(
-                sum(screenshot.getpixel((x + self.px(3), row))[:3])
+        # 会话列表与聊天区之间的分隔线是一整条连续竖线；按列统计边缘命中次数，
+        # 避免固定某一行采样时被群聊标题下方的副标题（如企业微信群信息）干扰。
+        step = max(1, self.px(4))
+        scan_rows = range(self.px(30), self.height - self.px(30), step)
+        best_x, best_score = None, 0
+        for x in range(self.px(250), self.width - self.px(350)):
+            score = sum(
+                1 for row in scan_rows
+                if sum(screenshot.getpixel((x + self.px(3), row))[:3])
                 - sum(screenshot.getpixel((x - self.px(3), row))[:3]) > 30
-                for row in (y, y - self.px(3))
             )
-        ]
-        if not candidates or candidates[-1] - candidates[0] > self.px(8):
+            if score > best_score:
+                best_x, best_score = x, score
+        if best_x is None or best_score < len(scan_rows) * 0.5:
             raise RuntimeError("无法确认微信聊天区位置，请使用默认浅色主题并打开聊天列表")
-        self.divider = candidates[len(candidates) // 2]
+        self.divider = best_x
 
     def px(self, value):
         return round(value * self.scale)
@@ -126,11 +145,15 @@ class VisualChat:
     def verify(self, target):
         px = self.px
         header = self.read((self.divider + px(8), px(39), self.width - px(145), px(69)), title=True)
-        if len(header) != 1 or header[0]["text"] != target or header[0]["x"] > 24 + px(36):
+        # 群聊标题下方还有一行群公告/企业信息，取最上面一行作为标题
+        first = min(header, key=lambda row: row["y"]) if header else None
+        if (not first or first["x"] > 24 + px(36)
+                or not _group_title_matches(first["text"], _normalize(target))):
             raise RuntimeError("无法通过聊天标题核对收件人，已中止发送")
 
     def open(self, target, copy_text):
         px = self.px
+        needle = _normalize(target)
         self.click(px(130), px(56))
         self.keys("{Ctrl}a")
         if not copy_text(target):
@@ -139,19 +162,35 @@ class VisualChat:
         time.sleep(0.65)
         left, top = px(129), px(76)
         rows = self.read((left, top, self.divider - px(18), self.height - px(12)))
-        matches = [
-            (row["x"] / 2, (row["y"] + row["h"] / 2) / 2)
-            for row in rows if row["text"] == target and px(6) <= row["x"] <= px(40)
-        ]
         # WeChat paints matching characters green. Boost their contrast before OCR.
         highlighted = self.read((left, top, min(self.divider - px(18), left + px(180)),
                                  self.height - px(12)), highlighted=True)
-        for row in highlighted:
-            x = (row["x"] - 24) / 3
-            y = (row["y"] - 24 + row["h"] / 2) / 3
-            if row["text"] == target and px(3) <= x <= px(20):
-                if all(abs(y - match_y) > px(8) for _, match_y in matches):
-                    matches.append((x, y))
+        matches = []
+        for batch, is_highlighted in ((rows, False), (highlighted, True)):
+            for row in batch:
+                if is_highlighted:
+                    x = (row["x"] - 24) / 3
+                    y = (row["y"] - 24 + row["h"] / 2) / 3
+                    if not px(3) <= x <= px(20):
+                        continue
+                else:
+                    x = row["x"] / 2
+                    y = (row["y"] + row["h"] / 2) / 2
+                    if not px(6) <= row["x"] <= px(40):
+                        continue
+                text = _normalize(row["text"])
+                if text == needle:
+                    kind = "exact"
+                elif text.startswith(needle):
+                    # 企业微信/群聊图标紧跟群名，OCR 会把它并进名称（测试2 → 测试20）
+                    kind = "prefix"
+                else:
+                    continue
+                if all(abs(y - known_y) > px(8) for _, known_y, _ in matches):
+                    matches.append((x, y, kind))
+        exact = [(x, y) for x, y, kind in matches if kind == "exact"]
+        prefix = [(x, y) for x, y, kind in matches if kind == "prefix"]
+        matches = exact if exact else prefix
         if len(matches) != 1:
             self.keys("{Esc}")
             if matches:
