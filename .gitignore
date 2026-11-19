@@ -5,3 +5,5 @@
 /python/bundle/
 __pycache__/
 *.pyc
+.idea
+.github
