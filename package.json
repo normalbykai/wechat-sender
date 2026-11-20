@@ -20,7 +20,7 @@
     "@vitejs/plugin-react": "^4.3.4",
     "concurrently": "^9.1.2",
     "electron": "^34.0.0",
-    "electron-builder": "^25.1.8",
+    "electron-builder": "^26.18.0",
     "esbuild": "^0.16.16",
     "vite": "^6.1.0",
     "wait-on": "^8.0.3"
@@ -52,7 +52,9 @@
         "from": "python",
         "to": "python",
         "filter": [
-          "**/*"
+          "**/*",
+          "!**/__pycache__/**",
+          "!**/*.pyc"
         ]
       }
     ],

@@ -119,7 +119,8 @@ class VisualChat:
 
     def read(self, box, title=False, highlighted=False):
         image = self.capture().crop(box)
-        scale = 3 if highlighted else 2
+        # 标题字号小，2 倍放大时 Windows OCR 会漏识别，和绿色高亮识别一样用 3 倍
+        scale = 3 if (highlighted or title) else 2
         image = image.resize((image.width * scale, image.height * scale))
         if title:
             image = ImageOps.expand(image.convert("L").point(lambda value: 0 if value < 160 else 255),
@@ -144,12 +145,29 @@ class VisualChat:
 
     def verify(self, target):
         px = self.px
-        header = self.read((self.divider + px(8), px(39), self.width - px(145), px(69)), title=True)
-        # 群聊标题下方还有一行群公告/企业信息，取最上面一行作为标题
-        first = min(header, key=lambda row: row["y"]) if header else None
-        if (not first or first["x"] > 24 + px(36)
-                or not _group_title_matches(first["text"], _normalize(target))):
-            raise RuntimeError("无法通过聊天标题核对收件人，已中止发送")
+        box = (self.divider + px(8), px(39), self.width - px(145), px(69))
+        first = None
+        # 点击搜索结果后聊天区可能还没渲染完，多等几轮再判失败
+        for attempt in range(4):
+            header = self.read(box, title=True)
+            # 群聊标题下方还有一行群公告/企业信息，取最上面一行作为标题
+            first = min(header, key=lambda row: row["y"]) if header else None
+            if (first and first["x"] <= 24 + 3 * px(36)
+                    and _group_title_matches(first["text"], _normalize(target))):
+                return
+            if attempt < 3:
+                time.sleep(0.6)
+        found = first["text"] if first else "（未识别到标题文字）"
+        print(f"[WARN] 聊天标题校验未通过：期望「{target}」，实际识别到「{found}」", flush=True)
+        try:
+            log_dir = Path(os.environ.get("USERPROFILE") or Path.home()) / ".wechat-sender" / "logs"
+            log_dir.mkdir(parents=True, exist_ok=True)
+            shot = log_dir / f"verify-fail-{time.strftime('%Y%m%d-%H%M%S')}.png"
+            self.capture().save(shot)
+            print(f"[WARN] 已保存失败截图：{shot}", flush=True)
+        except Exception as e:
+            print(f"[WARN] 保存失败截图出错：{e}", flush=True)
+        raise RuntimeError("无法通过聊天标题核对收件人，已中止发送")
 
     def open(self, target, copy_text):
         px = self.px
@@ -188,15 +206,21 @@ class VisualChat:
                     continue
                 if all(abs(y - known_y) > px(8) for _, known_y, _ in matches):
                     matches.append((x, y, kind))
-        exact = [(x, y) for x, y, kind in matches if kind == "exact"]
-        prefix = [(x, y) for x, y, kind in matches if kind == "prefix"]
-        matches = exact if exact else prefix
-        if len(matches) != 1:
+        exact = sorted(((x, y) for x, y, kind in matches if kind == "exact"), key=lambda p: p[1])
+        prefix = sorted(((x, y) for x, y, kind in matches if kind == "prefix"), key=lambda p: p[1])
+        if exact:
+            # 微信会把同一聊天在「最常使用」「联系人」等分组重复展示，产生多条完全匹配。
+            # 取最上方一条，进入后由 verify() 核对聊天标题兜底，标题不符会中止发送。
+            x, y = exact[0]
+            if len(exact) > 1:
+                print(f"[WARN] 搜索结果有 {len(exact)} 条完全匹配，已选择最上方一条（y={round(y)}）并核对聊天标题", flush=True)
+        elif len(prefix) == 1:
+            x, y = prefix[0]
+        else:
             self.keys("{Esc}")
-            if matches:
+            if prefix:
                 raise RuntimeError("微信搜索结果中有多个匹配项，请使用唯一备注或群名")
             raise RuntimeError("未能识别出与收件人完全一致的微信搜索结果")
-        x, y = matches[0]
         self.click(left + round(x) + px(3), top + round(y), popup=True)
         time.sleep(0.45)
         self.verify(target)
